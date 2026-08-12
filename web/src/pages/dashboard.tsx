@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { AlertCircle, AlertTriangle } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 import { Activity, Gauge, RefreshCw, Settings2, WifiOff, Zap } from "lucide-react"
 import { toast } from "sonner"
@@ -25,6 +26,7 @@ import { getSummary, type ModelSummaryComputed } from "@/lib/api"
 import { useBaseUrl } from "@/hooks/use-base-url"
 import { readSnapshot, writeSnapshot } from "@/lib/snapshot-store"
 import { Sparkline } from "@/components/sparkline"
+import { MultiModelChart } from "@/components/multi-model-chart"
 
 const POLL_INTERVAL_MS = 10_000
 
@@ -145,6 +147,7 @@ export function DashboardPage() {
     ? state.models
     : []
   const summary = useMemo(() => summarize(models), [models])
+  const alerts = useMemo(() => buildAlerts(models, summary), [models, summary])
   const lastUpdatedLabel = useMemo(() => {
     if (state.kind !== "live" && state.kind !== "snapshot") return "—"
     return new Date(state.updatedAt).toLocaleTimeString()
@@ -209,6 +212,31 @@ export function DashboardPage() {
       </header>
 
       <main className="container mx-auto space-y-6 px-4 py-6">
+        {/* 异常告警 */}
+        {alerts.length > 0 && (
+          <section className="space-y-2">
+            {alerts.map((a, i) => (
+              <div
+                key={i}
+                className={
+                  "flex items-start gap-2 rounded-lg border px-3 py-2 text-sm backdrop-blur " +
+                  (a.severity === "danger"
+                    ? "border-destructive/40 bg-destructive/10 text-destructive"
+                    : "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400")
+                }
+                role="alert"
+              >
+                {a.severity === "danger" ? (
+                  <AlertCircle className="mt-0.5 size-4 shrink-0" />
+                ) : (
+                  <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+                )}
+                <span>{a.message}</span>
+              </div>
+            ))}
+          </section>
+        )}
+
         {/* KPI 顶栏 */}
         <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <KpiCard
@@ -248,6 +276,31 @@ export function DashboardPage() {
           />
         </section>
 
+        {/* Top 5 趋势对比 */}
+        <Card className="border-border/40">
+          <CardHeader>
+            <CardTitle>Top 5 趋势</CardTitle>
+            <CardDescription>
+              实线 = 平均延迟（左轴 ms），虚线 = 成功率（右轴 %）；按请求量取前 5
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {state.kind === "loading" ? (
+              <Skeleton className="h-72 w-full" />
+            ) : state.kind === "error" ? (
+              <div className="text-sm text-destructive">
+                加载失败：{state.message}
+              </div>
+            ) : (
+              <MultiModelChart
+                baseUrl={baseUrl!}
+                modelNames={models.slice(0, 5).map((m) => m.model_name)}
+                hours={24}
+              />
+            )}
+          </CardContent>
+        </Card>
+
         {/* 模型大表 */}
         <Card className="border-border/40">
           <CardHeader>
@@ -268,7 +321,8 @@ export function DashboardPage() {
                 暂无数据
               </div>
             ) : (
-              <Table>
+              <div className="-mx-6 overflow-x-auto px-6">
+                <Table>
                 <TableHeader>
                   <TableRow>
                     <TableHead>模型</TableHead>
@@ -325,6 +379,7 @@ export function DashboardPage() {
                   ))}
                 </TableBody>
               </Table>
+              </div>
             )}
           </CardContent>
         </Card>
@@ -334,6 +389,53 @@ export function DashboardPage() {
 }
 
 type Tone = "default" | "warn" | "danger"
+
+type Alert = { severity: "warn" | "danger"; message: string }
+
+function buildAlerts(
+  models: ModelSummaryComputed[],
+  summary: ReturnType<typeof summarize>
+): Alert[] {
+  const out: Alert[] = []
+  if (models.length === 0) return out
+  if (summary.successRate < 95 && summary.totalRequests > 0) {
+    out.push({
+      severity: "danger",
+      message: `整体成功率 ${summary.successRate.toFixed(1)}% 低于 95%`,
+    })
+  } else if (summary.successRate < 99 && summary.totalRequests > 0) {
+    out.push({
+      severity: "warn",
+      message: `整体成功率 ${summary.successRate.toFixed(1)}%（目标 ≥ 99%）`,
+    })
+  }
+  const degraded = models.filter((m) => m.success_rate < 95)
+  if (degraded.length > 0) {
+    const names = degraded
+      .slice(0, 3)
+      .map((m) => m.model_name)
+      .join("、")
+    const more = degraded.length > 3 ? ` 等 ${degraded.length} 个` : ""
+    out.push({
+      severity: "danger",
+      message: `${degraded.length} 个模型成功率 < 95%：${names}${more}`,
+    })
+  }
+  const slow = models.filter((m) => m.avg_latency_ms > 10_000)
+  if (slow.length > 0) {
+    const names = slow
+      .slice(0, 3)
+      .map((m) => m.model_name)
+      .join("、")
+    const more = slow.length > 3 ? ` 等 ${slow.length} 个` : ""
+    out.push({
+      severity: "warn",
+      message: `${slow.length} 个模型平均延迟 > 10s：${names}${more}`,
+    })
+  }
+  return out
+}
+
 function KpiCard({
   label,
   value,

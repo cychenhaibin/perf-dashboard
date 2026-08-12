@@ -52,3 +52,6 @@ perf-dashboard
 web_dist/assets/
 web_dist/favicon.svg
 web_dist_placeholder/
+
+# TypeScript build cache
+*.tsbuildinfo
