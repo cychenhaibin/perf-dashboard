@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react"
 import { useNavigate } from "react-router-dom"
-import { ArrowRight, Gauge } from "lucide-react"
+import { ArrowRight, Gauge, KeyRound } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -14,6 +14,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { useBaseUrl } from "@/hooks/use-base-url"
+import { ping } from "@/lib/api"
 
 function normalizeBaseUrl(raw: string): string | null {
   const trimmed = raw.trim()
@@ -29,9 +30,10 @@ function normalizeBaseUrl(raw: string): string | null {
 }
 
 export function ConfigurePage() {
-  const { setBaseUrl } = useBaseUrl()
+  const { setBaseUrl, setApiToken } = useBaseUrl()
   const navigate = useNavigate()
   const [draft, setDraft] = useState("")
+  const [tokenDraft, setTokenDraft] = useState("")
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
@@ -44,20 +46,13 @@ export function ConfigurePage() {
       return
     }
     setSubmitting(true)
-    // Ping /api/user/self to confirm the baseUrl is reachable and the upstream
-    // new-api answers JSON. We don't care about the response body — a 200
-    // means the URL is live; any other status surfaces a friendly error.
     try {
-      const res = await fetch(`${normalized}/api/user/self`, {
-        method: "GET",
-        credentials: "include",
-        signal: AbortSignal.timeout(8000),
-      })
-      // 200 (logged in) or 401 (login required) both mean the URL is reachable.
-      if (res.status !== 200 && res.status !== 401) {
-        throw new Error(`HTTP ${res.status}`)
+      const result = await ping(normalized)
+      if (!result.ok) {
+        throw new Error(`HTTP ${result.status}`)
       }
       setBaseUrl(normalized)
+      setApiToken(tokenDraft.trim() || null)
       toast.success("已配置 baseUrl", { description: normalized })
       navigate("/", { replace: true })
     } catch (err) {
@@ -100,15 +95,39 @@ export function ConfigurePage() {
                 disabled={submitting}
                 className="bg-background/60 backdrop-blur"
               />
-              {error && (
-                <p className="text-sm text-destructive" role="alert">
-                  {error}
-                </p>
-              )}
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="apiToken" className="flex items-center gap-1.5">
+                <KeyRound className="size-3.5" />
+                API Token <span className="text-muted-foreground">（可选）</span>
+              </Label>
+              <Input
+                id="apiToken"
+                name="apiToken"
+                type="password"
+                autoComplete="off"
+                spellCheck={false}
+                placeholder="sk-..."
+                value={tokenDraft}
+                onChange={(e) => setTokenDraft(e.target.value)}
+                disabled={submitting}
+                className="bg-background/60 backdrop-blur"
+              />
               <p className="text-xs text-muted-foreground">
-                所有 /api/* 请求都会发送到这个地址。可以在右上角齿轮里重新配置。
+                仅在 new-api 的 <code>/api/*</code> 路径未启用 CORS 时需要。
+                可在 new-api 的"令牌管理"里创建。仅保存在本机浏览器。
               </p>
             </div>
+
+            {error && (
+              <p className="text-sm text-destructive" role="alert">
+                {error}
+              </p>
+            )}
+            <p className="text-xs text-muted-foreground">
+              所有 <code>/api/*</code> 请求都会经本机服务端转发到上面的地址。可以在右上角齿轮里重新配置。
+            </p>
             <Button
               type="submit"
               className="w-full"

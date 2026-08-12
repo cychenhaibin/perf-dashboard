@@ -34,6 +34,11 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
+	// Reverse proxy: GET /api/proxy/{path}?baseUrl=... → {baseUrl}/api/{path}
+	// See server/proxy.go for the why.
+	mux.HandleFunc("GET /api/proxy/{path...}", proxyHandler)
+	mux.HandleFunc("POST /api/proxy/{path...}", proxyHandler)
+
 	fileServer := http.FileServer(http.FS(dist))
 
 	// SPA fallback: anything that isn't a real file in the bundle is served as

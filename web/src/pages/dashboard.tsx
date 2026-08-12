@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { AlertCircle, AlertTriangle } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 import { Activity, Gauge, RefreshCw, Settings2, WifiOff, Zap } from "lucide-react"
@@ -28,36 +29,46 @@ import { readSnapshot, writeSnapshot } from "@/lib/snapshot-store"
 import { Sparkline } from "@/components/sparkline"
 import { MultiModelChart } from "@/components/multi-model-chart"
 
-const POLL_INTERVAL_MS = 10_000
+const HOURS = 24
+const SUMMARY_KEY = ["perf-metrics-summary", HOURS] as const
 
-type LoadState =
-  | { kind: "loading" }
-  | { kind: "live"; models: ModelSummaryComputed[]; updatedAt: number }
-  | { kind: "snapshot"; models: ModelSummaryComputed[]; updatedAt: number }
-  | { kind: "error"; message: string }
-
+// The /api/perf-metrics/summary endpoint returns per-model avg_latency_ms /
+// success_rate / avg_tps; it does NOT include per-model request_count,
+// output_tokens, generation_ms, etc. So the KPIs are simple averages across
+// the model set, same approach new-api's own PerformanceOverview uses
+// (buildPerformanceSummary in performance-overview.tsx). The "总模型数"
+// count replaces what would have been a request-count aggregate.
 function summarize(models: ModelSummaryComputed[]) {
-  let totalRequests = 0
-  let totalSuccess = 0
-  let totalOutputTokens = 0
-  let totalGenerationMs = 0
-  let totalLatencyMs = 0
+  let latencySum = 0
+  let latencyN = 0
+  let tpsSum = 0
+  let tpsN = 0
+  let successSum = 0
+  let successN = 0
   for (const m of models) {
-    totalRequests += m.request_count
-    totalSuccess += m.success_count
-    totalOutputTokens += m.output_tokens
-    totalGenerationMs += m.generation_ms
-    totalLatencyMs += m.total_latency_ms
+    if (Number.isFinite(m.avg_latency_ms) && m.avg_latency_ms > 0) {
+      latencySum += m.avg_latency_ms
+      latencyN += 1
+    }
+    if (Number.isFinite(m.avg_tps) && m.avg_tps > 0) {
+      tpsSum += m.avg_tps
+      tpsN += 1
+    }
+    if (Number.isFinite(m.success_rate)) {
+      successSum += m.success_rate
+      successN += 1
+    }
   }
-  const avgTps =
-    totalGenerationMs > 0 ? (totalOutputTokens / (totalGenerationMs / 1000)) : 0
-  const successRate =
-    totalRequests > 0 ? (totalSuccess / totalRequests) * 100 : 0
-  const avgLatency = totalRequests > 0 ? totalLatencyMs / totalRequests : 0
-  return { totalRequests, successRate, avgTps, avgLatency }
+  return {
+    totalModels: models.length,
+    avgLatency: latencyN > 0 ? latencySum / latencyN : NaN,
+    avgTps: tpsN > 0 ? tpsSum / tpsN : NaN,
+    successRate: successN > 0 ? successSum / successN : NaN,
+  }
 }
 
 function formatNumber(n: number): string {
+  if (!Number.isFinite(n)) return "—"
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M"
   if (n >= 1_000) return (n / 1_000).toFixed(1) + "k"
   return Math.round(n).toString()
@@ -71,87 +82,92 @@ function formatLatency(ms: number): string {
 export function DashboardPage() {
   const { baseUrl, setBaseUrl } = useBaseUrl()
   const navigate = useNavigate()
-  const [state, setState] = useState<LoadState>({ kind: "loading" })
+  const queryClient = useQueryClient()
+  // Tick for the "更新于" label so it auto-refreshes every second without
+  // re-running any query. (Mirrors new-api's relative-time widgets; cheap
+  // because it only re-renders this component.)
   const [now, setNow] = useState<number>(() => Date.now())
-  const abortRef = useRef<AbortController | null>(null)
 
-  const fetchNow = useCallback(async () => {
-    if (!baseUrl) return
-    abortRef.current?.abort()
-    const ctrl = new AbortController()
-    abortRef.current = ctrl
-    try {
-      const data = await getSummary(baseUrl, 24, ctrl.signal)
-      const models = data.models ?? []
-      const updatedAt = Date.now()
-      // Best-effort: write to IndexedDB so a future outage still has data.
-      void writeSnapshot(baseUrl, models, updatedAt)
-      setState({ kind: "live", models, updatedAt })
-    } catch (err) {
-      if (ctrl.signal.aborted) return
-      const message = err instanceof Error ? err.message : "unknown"
-      const cached = await readSnapshot(baseUrl)
+  // Mirror new-api's own PerformanceOverview: useQuery with the same
+  // queryKey + staleTime: 60s. No active polling — React Query's built-in
+  // cache prevents the upstream /api/perf-metrics from being hit more
+  // than once per minute per key. Pulling more often trips new-api's 429.
+  const summaryQuery = useQuery({
+    queryKey: [...SUMMARY_KEY, baseUrl ?? ""],
+    queryFn: ({ signal }) => getSummary(HOURS, signal),
+    enabled: Boolean(baseUrl),
+    staleTime: 60 * 1000,
+    retry: false,
+  })
+
+  // Best-effort: write a Dexie snapshot whenever fresh data lands, so a
+  // future outage still has data to fall back to.
+  useEffect(() => {
+    if (!baseUrl || !summaryQuery.data) return
+    void writeSnapshot(baseUrl, summaryQuery.data.models ?? [], Date.now())
+  }, [baseUrl, summaryQuery.data])
+
+  // If the query errors and we have a snapshot, prefer that — and toast.
+  const [snapshot, setSnapshot] = useState<{
+    models: ModelSummaryComputed[]
+    updatedAt: number
+  } | null>(null)
+  useEffect(() => {
+    if (!baseUrl || !summaryQuery.error) {
+      setSnapshot(null)
+      return
+    }
+    let cancelled = false
+    void readSnapshot(baseUrl).then((cached) => {
+      if (cancelled) return
       if (cached) {
-        setState({
-          kind: "snapshot",
-          models: cached.models,
-          updatedAt: cached.updatedAt,
-        })
+        setSnapshot({ models: cached.models, updatedAt: cached.updatedAt })
+        const message =
+          summaryQuery.error instanceof Error
+            ? summaryQuery.error.message
+            : "unknown"
         toast.warning("已切换到离线快照", {
           description: `上次更新 ${new Date(cached.updatedAt).toLocaleTimeString()} · ${message}`,
         })
-      } else {
-        setState({ kind: "error", message })
-        toast.error("拉取失败", { description: message })
       }
-    }
-  }, [baseUrl])
-
-  useEffect(() => {
-    if (!baseUrl) return
-    void fetchNow()
-    let timer: ReturnType<typeof setInterval> | null = null
-    const start = () => {
-      if (timer) return
-      timer = setInterval(() => void fetchNow(), POLL_INTERVAL_MS)
-    }
-    const stop = () => {
-      if (timer) {
-        clearInterval(timer)
-        timer = null
-      }
-    }
-    const onVis = () => {
-      if (document.hidden) {
-        stop()
-      } else {
-        void fetchNow()
-        start()
-      }
-    }
-    start()
-    document.addEventListener("visibilitychange", onVis)
+    })
     return () => {
-      stop()
-      document.removeEventListener("visibilitychange", onVis)
-      abortRef.current?.abort()
+      cancelled = true
     }
-  }, [baseUrl, fetchNow])
+  }, [baseUrl, summaryQuery.error])
+
+  // Returning to the foreground: ask React Query to refetch. The 60s
+  // staleTime still throttles us, so this only does work if the cache
+  // has actually gone stale.
+  useEffect(() => {
+    const onVis = () => {
+      if (!document.hidden) {
+        void queryClient.invalidateQueries({ queryKey: ["perf-metrics-summary"] })
+      }
+    }
+    document.addEventListener("visibilitychange", onVis)
+    return () => document.removeEventListener("visibilitychange", onVis)
+  }, [queryClient])
 
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(t)
   }, [])
 
-  const models = state.kind === "live" || state.kind === "snapshot"
-    ? state.models
-    : []
+  const liveModels = summaryQuery.data?.models ?? []
+  const models = snapshot ? snapshot.models : liveModels
   const summary = useMemo(() => summarize(models), [models])
   const alerts = useMemo(() => buildAlerts(models, summary), [models, summary])
+  const usingSnapshot = Boolean(snapshot) && Boolean(summaryQuery.error)
+  const updatedAt = usingSnapshot
+    ? snapshot!.updatedAt
+    : summaryQuery.dataUpdatedAt
   const lastUpdatedLabel = useMemo(() => {
-    if (state.kind !== "live" && state.kind !== "snapshot") return "—"
-    return new Date(state.updatedAt).toLocaleTimeString()
-  }, [state, now])
+    if (!updatedAt) return "—"
+    return new Date(updatedAt).toLocaleTimeString()
+  }, [updatedAt, now])
+
+  const isLoading = summaryQuery.isLoading || (Boolean(baseUrl) && !summaryQuery.data && !summaryQuery.error && !snapshot)
 
   const onReconfigure = () => {
     setBaseUrl(null)
@@ -177,25 +193,25 @@ export function DashboardPage() {
             </span>
           </div>
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            {state.kind === "snapshot" && (
+            {usingSnapshot && (
               <Badge variant="outline" className="border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400">
                 <WifiOff className="mr-1 size-3" />
                 离线快照
               </Badge>
             )}
             <span className="hidden sm:inline">
-              {state.kind === "loading" ? "加载中…" : `更新于 ${lastUpdatedLabel}`}
+              {isLoading ? "加载中…" : `更新于 ${lastUpdatedLabel}`}
             </span>
             <Button
               variant="ghost"
               size="icon"
-              onClick={() => void fetchNow()}
-              disabled={state.kind === "loading"}
+              onClick={() => void summaryQuery.refetch()}
+              disabled={isLoading}
               aria-label="刷新"
             >
               <RefreshCw
                 className={
-                  state.kind === "loading" ? "size-4 animate-spin" : "size-4"
+                  isLoading ? "size-4 animate-spin" : "size-4"
                 }
               />
             </Button>
@@ -240,39 +256,45 @@ export function DashboardPage() {
         {/* KPI 顶栏 */}
         <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <KpiCard
-            label="总请求"
-            value={state.kind === "loading" ? null : formatNumber(summary.totalRequests)}
+            label="总模型数"
+            value={isLoading ? null : formatNumber(summary.totalModels)}
             icon={<Activity className="size-4" />}
-            loading={state.kind === "loading"}
+            loading={isLoading}
           />
           <KpiCard
             label="平均 TPS"
-            value={state.kind === "loading" ? null : summary.avgTps.toFixed(1)}
+            value={isLoading ? null : summary.avgTps.toFixed(1)}
             icon={<Zap className="size-4" />}
-            loading={state.kind === "loading"}
+            loading={isLoading}
           />
           <KpiCard
             label="平均延迟"
             value={
-              state.kind === "loading" ? null : formatLatency(summary.avgLatency)
+              isLoading || !Number.isFinite(summary.avgLatency)
+                ? null
+                : formatLatency(summary.avgLatency)
             }
             icon={<Gauge className="size-4" />}
-            loading={state.kind === "loading"}
+            loading={isLoading}
           />
           <KpiCard
             label="平均成功率"
             value={
-              state.kind === "loading" ? null : summary.successRate.toFixed(1) + "%"
+              isLoading || !Number.isFinite(summary.successRate)
+                ? null
+                : summary.successRate.toFixed(1) + "%"
             }
             icon={<Activity className="size-4" />}
             tone={
-              state.kind === "loading" || summary.successRate >= 99
+              isLoading || !Number.isFinite(summary.successRate)
                 ? "default"
-                : summary.successRate >= 95
-                  ? "warn"
-                  : "danger"
+                : summary.successRate >= 99
+                  ? "default"
+                  : summary.successRate >= 95
+                    ? "warn"
+                    : "danger"
             }
-            loading={state.kind === "loading"}
+            loading={isLoading}
           />
         </section>
 
@@ -285,17 +307,19 @@ export function DashboardPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            {state.kind === "loading" ? (
+            {isLoading ? (
               <Skeleton className="h-72 w-full" />
-            ) : state.kind === "error" ? (
+            ) : summaryQuery.error && !usingSnapshot ? (
               <div className="text-sm text-destructive">
-                加载失败：{state.message}
+                加载失败：{summaryQuery.error instanceof Error
+                  ? summaryQuery.error.message
+                  : "unknown"}
               </div>
             ) : (
               <MultiModelChart
                 baseUrl={baseUrl!}
                 modelNames={models.slice(0, 5).map((m) => m.model_name)}
-                hours={24}
+                hours={HOURS}
               />
             )}
           </CardContent>
@@ -310,11 +334,13 @@ export function DashboardPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            {state.kind === "loading" ? (
+            {isLoading ? (
               <Skeleton className="h-72 w-full" />
-            ) : state.kind === "error" ? (
+            ) : summaryQuery.error && !usingSnapshot ? (
               <div className="text-sm text-destructive">
-                加载失败：{state.message}
+                加载失败：{summaryQuery.error instanceof Error
+                  ? summaryQuery.error.message
+                  : "unknown"}
               </div>
             ) : models.length === 0 ? (
               <div className="text-sm text-muted-foreground">
@@ -330,7 +356,6 @@ export function DashboardPage() {
                     <TableHead className="text-right">TPS</TableHead>
                     <TableHead className="text-right">平均延迟</TableHead>
                     <TableHead className="text-right">成功率</TableHead>
-                    <TableHead className="text-right">请求数</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -372,9 +397,6 @@ export function DashboardPage() {
                           {m.success_rate.toFixed(1)}%
                         </Badge>
                       </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {formatNumber(m.request_count)}
-                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -398,12 +420,12 @@ function buildAlerts(
 ): Alert[] {
   const out: Alert[] = []
   if (models.length === 0) return out
-  if (summary.successRate < 95 && summary.totalRequests > 0) {
+  if (Number.isFinite(summary.successRate) && summary.successRate < 95) {
     out.push({
       severity: "danger",
       message: `整体成功率 ${summary.successRate.toFixed(1)}% 低于 95%`,
     })
-  } else if (summary.successRate < 99 && summary.totalRequests > 0) {
+  } else if (Number.isFinite(summary.successRate) && summary.successRate < 99) {
     out.push({
       severity: "warn",
       message: `整体成功率 ${summary.successRate.toFixed(1)}%（目标 ≥ 99%）`,

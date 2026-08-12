@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef } from "react"
+import { useQueries } from "@tanstack/react-query"
 import * as echarts from "echarts/core"
 import { LineChart } from "echarts/charts"
 import {
@@ -47,49 +48,43 @@ export function MultiModelChart({
   modelNames: string[]
   hours?: number
 }) {
-  const [series, setSeries] = useState<Series[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const chartRef = useRef<echarts.ECharts | null>(null)
 
-  // Fetch per-model series. Done with Promise.all + AbortController so we
-  // don't leak when the user changes baseUrl or unmounts mid-flight.
-  useEffect(() => {
-    const ctrl = new AbortController()
-    setLoading(true)
-    setError(null)
-    Promise.all(
-      modelNames.map(async (m): Promise<Series | null> => {
-        try {
-          const data = await getModelMetrics(baseUrl, m, hours, ctrl.signal)
-          // Flatten every group into one series so we get a single
-          // per-model trend. Groups are typically "default" + maybe "auto".
-          const buckets = flattenBuckets(data.groups ?? [])
-          if (buckets.length === 0) return null
-          return {
-            modelName: m,
-            successSeries: buckets.map((b) => [b.ts, b.successRate] as [number, number]),
-            latencySeries: buckets.map((b) => [b.ts, b.avgLatencyMs] as [number, number]),
-          }
-        } catch (err) {
-          if ((err as Error).name === "AbortError") return null
-          throw err
-        }
+  // Mirror new-api's per-model perf-metrics queries: one useQuery per model,
+  // each with the same 60s staleTime. Five models in parallel = at most 5
+  // requests per minute, not per re-render.
+  const queries = useQueries({
+    queries: modelNames.map((m) => ({
+      queryKey: ["perf-metrics", m, hours, baseUrl],
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        getModelMetrics(m, hours, signal),
+      staleTime: 60 * 1000,
+      retry: false,
+    })),
+  })
+
+  const loading = queries.some((q) => q.isLoading)
+  const error = queries.find((q) => q.error)?.error
+  const series: Series[] = useMemo(() => {
+    const out: Series[] = []
+    queries.forEach((q, i) => {
+      if (!q.data) return
+      const buckets = flattenBuckets(q.data.groups ?? [])
+      if (buckets.length === 0) return
+      const name = modelNames[i]
+      out.push({
+        modelName: name,
+        successSeries: buckets.map(
+          (b) => [b.ts, b.successRate] as [number, number]
+        ),
+        latencySeries: buckets.map(
+          (b) => [b.ts, b.avgLatencyMs] as [number, number]
+        ),
       })
-    )
-      .then((rows) => {
-        if (ctrl.signal.aborted) return
-        setSeries(rows.filter((r): r is Series => r !== null))
-        setLoading(false)
-      })
-      .catch((err) => {
-        if (ctrl.signal.aborted) return
-        setError(err instanceof Error ? err.message : "unknown")
-        setLoading(false)
-      })
-    return () => ctrl.abort()
-  }, [baseUrl, modelNames, hours])
+    })
+    return out
+  }, [queries, modelNames])
 
   const option = useMemo<EChartsCoreOption | null>(() => {
     if (series.length === 0) return null
@@ -197,7 +192,7 @@ export function MultiModelChart({
   if (error) {
     return (
       <div className="flex h-72 items-center justify-center text-sm text-destructive">
-        加载失败：{error}
+        加载失败：{error instanceof Error ? error.message : "unknown"}
       </div>
     )
   }
