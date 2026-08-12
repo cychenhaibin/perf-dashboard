@@ -1,0 +1,20 @@
+services:
+  perf-dashboard:
+    image: cychenhaibin/perf-dashboard:latest
+    container_name: perf-dashboard
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    # Read-only root filesystem except for /tmp. The dashboard holds no state
+    # (everything is in the browser's localStorage + IndexedDB), so we can
+    # safely lock down the container.
+    read_only: true
+    tmpfs:
+      - /tmp:size=8m
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "/perf-dashboard", "--health"]
+      # The binary doesn't implement --health yet; this is a placeholder.
+      # Remove the healthcheck block if you'd rather skip it.
+      disable: true
