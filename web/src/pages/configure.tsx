@@ -70,19 +70,8 @@ export function ConfigurePage() {
   }
 
   return (
-    <div className="relative isolate flex min-h-svh items-center justify-center overflow-hidden bg-background p-4">
-      {/* Glassmorphism background — three layered radial gradients + a soft
-          grain via mix-blend. Pure CSS, no images. */}
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-0 -z-10"
-      >
-        <div className="absolute -top-32 -left-32 size-[40rem] rounded-full bg-[radial-gradient(circle_at_center,oklch(0.6_0.2_264_/_0.35),transparent_60%)] blur-2xl" />
-        <div className="absolute -bottom-32 -right-24 size-[36rem] rounded-full bg-[radial-gradient(circle_at_center,oklch(0.7_0.18_184_/_0.3),transparent_60%)] blur-2xl" />
-        <div className="absolute top-1/3 left-1/2 size-[28rem] -translate-x-1/2 rounded-full bg-[radial-gradient(circle_at_center,oklch(0.65_0.22_330_/_0.22),transparent_60%)] blur-3xl" />
-      </div>
-
-      <Card className="w-full max-w-md border-border/40 bg-card/40 shadow-2xl backdrop-blur-xl supports-[backdrop-filter]:bg-card/30">
+    <div className="flex min-h-svh items-center justify-center bg-background p-4">
+      <Card className="w-full max-w-md border-border/40 bg-card/60 shadow-2xl backdrop-blur-xl supports-[backdrop-filter]:bg-card/40">
         <CardHeader className="text-center">
           <div className="mx-auto mb-2 flex size-12 items-center justify-center rounded-xl bg-primary/10 text-primary ring-1 ring-border/40 backdrop-blur">
             <Gauge className="size-6" />
