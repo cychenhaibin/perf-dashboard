@@ -78,7 +78,7 @@ make build           # builds web/, copies into web_dist/, compiles Go binary
 ## Docker deploy
 
 ```bash
-# 1. The CI workflow builds and pushes cychenhaibin/perf-dashboard:latest
+# 1. The CI workflow builds and pushes haibinchen/perf-dashboard:latest
 #    on every push to main. You just pull and run:
 
 mkdir -p /opt/perf-dashboard && cd /opt/perf-dashboard
@@ -100,13 +100,15 @@ docker image prune -f
 
 ## GitHub repo secrets
 
-The deploy workflow needs exactly two secrets (set under
+The deploy workflow needs exactly one secret (set under
 `Settings → Secrets and variables → Actions`):
 
 | Secret | Value |
 |---|---|
-| `DOCKERHUB_USERNAME` | `cychenhaibin` |
-| `DOCKERHUB_TOKEN` | A Docker Hub access token (Account Settings → Security → New Access Token) |
+| `DOCKER` | A Docker Hub access token (Account Settings → Security → New Access Token) |
+
+The Docker Hub username is hardcoded to `haibinchen` in the workflow's
+`env:` block. The access token is read from `secrets.DOCKER`.
 
 No SSH / server secrets are required — you deploy manually on the server
 with `docker compose pull && docker compose up -d`.

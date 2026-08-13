@@ -1,6 +1,6 @@
 services:
   perf-dashboard:
-    image: cychenhaibin/perf-dashboard:latest
+    image: haibinchen/perf-dashboard:latest
     container_name: perf-dashboard
     restart: unless-stopped
     ports:
