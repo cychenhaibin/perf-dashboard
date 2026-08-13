@@ -1,43 +1,36 @@
 import { useEffect, useMemo, useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { AlertCircle, AlertTriangle } from "lucide-react"
-import { useNavigate } from "react-router-dom"
-import { Activity, Gauge, RefreshCw, Settings2, WifiOff, Zap } from "lucide-react"
+import { AlertCircle, AlertTriangle, Activity, Gauge, Sparkles, Zap } from "lucide-react"
 import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
 import { getSummary, type ModelSummaryComputed } from "@/lib/api"
 import { useBaseUrl } from "@/hooks/use-base-url"
+import { useAnimatedNumber } from "@/hooks/use-animated-number"
 import { readSnapshot, writeSnapshot } from "@/lib/snapshot-store"
-import { Sparkline } from "@/components/sparkline"
+import { HeaderBanner } from "@/components/header-banner"
+import { FooterBar } from "@/components/footer-bar"
+import { HealthGauge } from "@/components/health-gauge"
+import { StatusDonut } from "@/components/status-donut"
+import { PerformanceBarChart } from "@/components/performance-bar-chart"
+import { ModelCard } from "@/components/model-card"
 import { MultiModelChart } from "@/components/multi-model-chart"
 
-const HOURS = 24
-const SUMMARY_KEY = ["perf-metrics-summary", HOURS] as const
+const STALE_MS = 60 * 1000
+const HOURS_OPTIONS = [
+  { value: 1, label: "1h" },
+  { value: 6, label: "6h" },
+  { value: 24, label: "24h" },
+  { value: 168, label: "7d" },
+]
+const DEFAULT_HOURS = 24
 
-// The /api/perf-metrics/summary endpoint returns per-model avg_latency_ms /
+// /api/perf-metrics/summary returns per-model avg_latency_ms /
 // success_rate / avg_tps; it does NOT include per-model request_count,
-// output_tokens, generation_ms, etc. So the KPIs are simple averages across
-// the model set, same approach new-api's own PerformanceOverview uses
-// (buildPerformanceSummary in performance-overview.tsx). The "总模型数"
-// count replaces what would have been a request-count aggregate.
+// output_tokens, etc. So the KPIs are simple averages across the model
+// set — same approach new-api's own PerformanceOverview uses.
 function summarize(models: ModelSummaryComputed[]) {
   let latencySum = 0
   let latencyN = 0
@@ -67,6 +60,46 @@ function summarize(models: ModelSummaryComputed[]) {
   }
 }
 
+type Alert = { severity: "warn" | "danger"; message: string }
+
+function buildAlerts(
+  models: ModelSummaryComputed[],
+  summary: ReturnType<typeof summarize>
+): Alert[] {
+  const out: Alert[] = []
+  if (models.length === 0) return out
+  if (Number.isFinite(summary.successRate) && summary.successRate < 95) {
+    out.push({
+      severity: "danger",
+      message: `整体成功率 ${summary.successRate.toFixed(1)}% 低于 95%`,
+    })
+  } else if (Number.isFinite(summary.successRate) && summary.successRate < 99) {
+    out.push({
+      severity: "warn",
+      message: `整体成功率 ${summary.successRate.toFixed(1)}%（目标 ≥ 99%）`,
+    })
+  }
+  const degraded = models.filter((m) => m.success_rate < 95)
+  if (degraded.length > 0) {
+    const names = degraded.slice(0, 3).map((m) => m.model_name).join("、")
+    const more = degraded.length > 3 ? ` 等 ${degraded.length} 个` : ""
+    out.push({
+      severity: "danger",
+      message: `${degraded.length} 个模型成功率 < 95%：${names}${more}`,
+    })
+  }
+  const slow = models.filter((m) => m.avg_latency_ms > 10_000)
+  if (slow.length > 0) {
+    const names = slow.slice(0, 3).map((m) => m.model_name).join("、")
+    const more = slow.length > 3 ? ` 等 ${slow.length} 个` : ""
+    out.push({
+      severity: "warn",
+      message: `${slow.length} 个模型平均延迟 > 10s：${names}${more}`,
+    })
+  }
+  return out
+}
+
 function formatNumber(n: number): string {
   if (!Number.isFinite(n)) return "—"
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M"
@@ -75,43 +108,40 @@ function formatNumber(n: number): string {
 }
 
 function formatLatency(ms: number): string {
+  if (!Number.isFinite(ms)) return "—"
   if (ms >= 1000) return (ms / 1000).toFixed(2) + "s"
   return Math.round(ms) + "ms"
 }
 
 export function DashboardPage() {
-  const { baseUrl, setBaseUrl } = useBaseUrl()
-  const navigate = useNavigate()
+  const { baseUrl } = useBaseUrl()
   const queryClient = useQueryClient()
-  // Tick for the "更新于" label so it auto-refreshes every second without
-  // re-running any query. (Mirrors new-api's relative-time widgets; cheap
-  // because it only re-renders this component.)
-  const [now, setNow] = useState<number>(() => Date.now())
+  const [hours, setHours] = useState<number>(DEFAULT_HOURS)
+  const [snapshot, setSnapshot] = useState<{
+    models: ModelSummaryComputed[]
+    updatedAt: number
+  } | null>(null)
 
   // Mirror new-api's own PerformanceOverview: useQuery with the same
-  // queryKey + staleTime: 60s. No active polling — React Query's built-in
-  // cache prevents the upstream /api/perf-metrics from being hit more
-  // than once per minute per key. Pulling more often trips new-api's 429.
+  // 60s staleTime. No active polling. Pulling more often trips new-api's
+  // 429. queryKey includes hours so changing the time-range tab
+  // re-fetches on demand.
   const summaryQuery = useQuery({
-    queryKey: [...SUMMARY_KEY, baseUrl ?? ""],
-    queryFn: ({ signal }) => getSummary(HOURS, signal),
+    queryKey: ["perf-metrics-summary", hours, baseUrl ?? ""],
+    queryFn: ({ signal }) => getSummary(hours, signal),
     enabled: Boolean(baseUrl),
-    staleTime: 60 * 1000,
+    staleTime: STALE_MS,
     retry: false,
   })
 
-  // Best-effort: write a Dexie snapshot whenever fresh data lands, so a
-  // future outage still has data to fall back to.
+  // Persist a Dexie snapshot on every fresh payload so a future outage
+  // still has data to fall back to.
   useEffect(() => {
     if (!baseUrl || !summaryQuery.data) return
     void writeSnapshot(baseUrl, summaryQuery.data.models ?? [], Date.now())
   }, [baseUrl, summaryQuery.data])
 
-  // If the query errors and we have a snapshot, prefer that — and toast.
-  const [snapshot, setSnapshot] = useState<{
-    models: ModelSummaryComputed[]
-    updatedAt: number
-  } | null>(null)
+  // On error, prefer the cached snapshot.
   useEffect(() => {
     if (!baseUrl || !summaryQuery.error) {
       setSnapshot(null)
@@ -123,9 +153,7 @@ export function DashboardPage() {
       if (cached) {
         setSnapshot({ models: cached.models, updatedAt: cached.updatedAt })
         const message =
-          summaryQuery.error instanceof Error
-            ? summaryQuery.error.message
-            : "unknown"
+          summaryQuery.error instanceof Error ? summaryQuery.error.message : "unknown"
         toast.warning("已切换到离线快照", {
           description: `上次更新 ${new Date(cached.updatedAt).toLocaleTimeString()} · ${message}`,
         })
@@ -149,103 +177,65 @@ export function DashboardPage() {
     return () => document.removeEventListener("visibilitychange", onVis)
   }, [queryClient])
 
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 1000)
-    return () => clearInterval(t)
-  }, [])
-
   const liveModels = summaryQuery.data?.models ?? []
   const models = snapshot ? snapshot.models : liveModels
   const summary = useMemo(() => summarize(models), [models])
   const alerts = useMemo(() => buildAlerts(models, summary), [models, summary])
   const usingSnapshot = Boolean(snapshot) && Boolean(summaryQuery.error)
-  const updatedAt = usingSnapshot
-    ? snapshot!.updatedAt
-    : summaryQuery.dataUpdatedAt
-  const lastUpdatedLabel = useMemo(() => {
-    if (!updatedAt) return "—"
-    return new Date(updatedAt).toLocaleTimeString()
-  }, [updatedAt, now])
+  const updatedAt = usingSnapshot ? snapshot!.updatedAt : summaryQuery.dataUpdatedAt
 
+  const { healthy, warn, danger, degraded } = useMemo(() => {
+    const healthyArr: ModelSummaryComputed[] = []
+    const warnArr: ModelSummaryComputed[] = []
+    const dangerArr: ModelSummaryComputed[] = []
+    const degradedNames: string[] = []
+    for (const m of models) {
+      if (m.success_rate >= 99) healthyArr.push(m)
+      else if (m.success_rate >= 95) warnArr.push(m)
+      else {
+        dangerArr.push(m)
+        degradedNames.push(m.model_name)
+      }
+    }
+    return { healthy: healthyArr.length, warn: warnArr.length, danger: dangerArr.length, degraded: degradedNames }
+  }, [models])
+
+  const lastSyncLabel = updatedAt ? new Date(updatedAt).toLocaleTimeString() : "—"
+  const connectionStatus: "online" | "stale" | "offline" = usingSnapshot
+    ? "offline"
+    : summaryQuery.isFetching
+      ? "online"
+      : "online"
   const isLoading = summaryQuery.isLoading || (Boolean(baseUrl) && !summaryQuery.data && !summaryQuery.error && !snapshot)
-
-  const onReconfigure = () => {
-    setBaseUrl(null)
-    navigate("/configure")
-  }
 
   return (
     <div className="min-h-svh bg-background">
-      {/* Header */}
-      <header className="sticky top-0 z-20 border-b border-border/40 bg-background/60 backdrop-blur-xl">
-        <div className="container mx-auto flex h-14 items-center gap-4 px-4">
-          <div className="flex items-center gap-2">
-            <div className="flex size-7 items-center justify-center rounded-md bg-primary/10 text-primary">
-              <Gauge className="size-4" />
-            </div>
-            <h1 className="text-base font-semibold tracking-tight">
-              perf-dashboard
-            </h1>
-          </div>
-          <div className="flex flex-1 items-center gap-2 text-sm text-muted-foreground">
-            <span className="hidden truncate rounded-md bg-muted/40 px-2 py-0.5 sm:inline">
-              {baseUrl}
-            </span>
-          </div>
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            {usingSnapshot && (
-              <Badge variant="outline" className="border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400">
-                <WifiOff className="mr-1 size-3" />
-                离线快照
-              </Badge>
-            )}
-            <span className="hidden sm:inline">
-              {isLoading ? "加载中…" : `更新于 ${lastUpdatedLabel}`}
-            </span>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => void summaryQuery.refetch()}
-              disabled={isLoading}
-              aria-label="刷新"
-            >
-              <RefreshCw
-                className={
-                  isLoading ? "size-4 animate-spin" : "size-4"
-                }
-              />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={onReconfigure}
-              aria-label="重新配置"
-            >
-              <Settings2 className="size-4" />
-            </Button>
-          </div>
-        </div>
-      </header>
+      <HeaderBanner
+        status={connectionStatus}
+        onRefresh={() => void summaryQuery.refetch()}
+        refreshing={summaryQuery.isFetching}
+        lastSyncLabel={lastSyncLabel}
+      />
 
-      <main className="container mx-auto space-y-6 px-4 py-6">
+      <main className="container mx-auto space-y-4 px-4 py-4">
         {/* 异常告警 */}
         {alerts.length > 0 && (
-          <section className="space-y-2">
+          <section className="space-y-1.5">
             {alerts.map((a, i) => (
               <div
                 key={i}
                 className={
-                  "flex items-start gap-2 rounded-lg border px-3 py-2 text-sm backdrop-blur " +
+                  "flex items-start gap-2 rounded-md border px-3 py-1.5 text-xs backdrop-blur " +
                   (a.severity === "danger"
-                    ? "border-destructive/40 bg-destructive/10 text-destructive"
+                    ? "border-rose-500/40 bg-rose-500/10 text-rose-600 dark:text-rose-400"
                     : "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400")
                 }
                 role="alert"
               >
                 {a.severity === "danger" ? (
-                  <AlertCircle className="mt-0.5 size-4 shrink-0" />
+                  <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
                 ) : (
-                  <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+                  <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
                 )}
                 <span>{a.message}</span>
               </div>
@@ -253,243 +243,237 @@ export function DashboardPage() {
           </section>
         )}
 
-        {/* KPI 顶栏 */}
-        <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <KpiCard
+        {/* KPI 大字 — 5 张, 数字带 count-up 动画. 强制 grid-cols-5 保证指挥中心感,
+            窄屏会自然换行, 不依赖断点. */}
+        <section className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5">
+          <BigKpi
             label="总模型数"
-            value={isLoading ? null : formatNumber(summary.totalModels)}
-            icon={<Activity className="size-4" />}
+            value={summary.totalModels}
+            format={formatNumber}
+            icon={<Sparkles className="size-4" />}
+            tone="default"
             loading={isLoading}
           />
-          <KpiCard
+          <BigKpi
             label="平均 TPS"
-            value={isLoading ? null : summary.avgTps.toFixed(1)}
+            value={summary.avgTps}
+            format={(n) => (Number.isFinite(n) ? n.toFixed(1) : "—")}
             icon={<Zap className="size-4" />}
+            tone="default"
             loading={isLoading}
           />
-          <KpiCard
+          <BigKpi
             label="平均延迟"
-            value={
-              isLoading || !Number.isFinite(summary.avgLatency)
-                ? null
-                : formatLatency(summary.avgLatency)
-            }
+            value={summary.avgLatency}
+            format={(n) => formatLatency(n)}
             icon={<Gauge className="size-4" />}
+            tone="default"
             loading={isLoading}
           />
-          <KpiCard
+          <BigKpi
             label="平均成功率"
-            value={
-              isLoading || !Number.isFinite(summary.successRate)
-                ? null
-                : summary.successRate.toFixed(1) + "%"
-            }
+            value={summary.successRate}
+            format={(n) => (Number.isFinite(n) ? n.toFixed(1) + "%" : "—")}
             icon={<Activity className="size-4" />}
             tone={
-              isLoading || !Number.isFinite(summary.successRate)
+              !Number.isFinite(summary.successRate)
                 ? "default"
                 : summary.successRate >= 99
-                  ? "default"
+                  ? "ok"
                   : summary.successRate >= 95
                     ? "warn"
                     : "danger"
             }
             loading={isLoading}
           />
+          <BigKpi
+            label="健康 / 异常"
+            value={healthy}
+            secondary={`${warn} 告警 / ${danger} 异常`}
+            format={formatNumber}
+            icon={<Activity className="size-4" />}
+            tone={danger > 0 ? "danger" : warn > 0 ? "warn" : "ok"}
+            loading={isLoading}
+          />
         </section>
 
-        {/* Top 5 趋势对比 */}
-        <Card className="border-border/40">
-          <CardHeader>
-            <CardTitle>Top 5 趋势</CardTitle>
-            <CardDescription>
-              实线 = 平均延迟（左轴 ms），虚线 = 成功率（右轴 %）；按请求量取前 5
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {isLoading ? (
-              <Skeleton className="h-72 w-full" />
-            ) : summaryQuery.error && !usingSnapshot ? (
-              <div className="text-sm text-destructive">
-                加载失败：{summaryQuery.error instanceof Error
-                  ? summaryQuery.error.message
-                  : "unknown"}
+        {/* 趋势 + 健康度 (2:1) */}
+        <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+          <Card className="border-border/40 lg:col-span-2">
+            <CardHeader className="pb-2">
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="text-base">TOP 5 模型性能趋势</CardTitle>
+                  <CardDescription className="text-xs">
+                    实线 = 平均延迟（左轴），虚线 = 成功率（右轴）
+                  </CardDescription>
+                </div>
+                <Badge variant="outline" className="font-mono text-[10px]">
+                  最近 {hours}h
+                </Badge>
               </div>
-            ) : (
-              <MultiModelChart
-                baseUrl={baseUrl!}
-                modelNames={models.slice(0, 5).map((m) => m.model_name)}
-                hours={HOURS}
-              />
-            )}
-          </CardContent>
-        </Card>
+            </CardHeader>
+            <CardContent>
+              {isLoading ? (
+                <Skeleton className="h-72 w-full" />
+              ) : summaryQuery.error && !usingSnapshot ? (
+                <div className="text-sm text-rose-500">
+                  加载失败：{summaryQuery.error instanceof Error
+                    ? summaryQuery.error.message
+                    : "unknown"}
+                </div>
+              ) : (
+                <MultiModelChart
+                  baseUrl={baseUrl!}
+                  modelNames={models.slice(0, 5).map((m) => m.model_name)}
+                  hours={hours}
+                />
+              )}
+            </CardContent>
+          </Card>
 
-        {/* 模型大表 */}
-        <Card className="border-border/40">
-          <CardHeader>
-            <CardTitle>模型性能</CardTitle>
-            <CardDescription>
-              所有模型的 24h TPS、延迟、成功率（按请求量排序）
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {isLoading ? (
-              <Skeleton className="h-72 w-full" />
-            ) : summaryQuery.error && !usingSnapshot ? (
-              <div className="text-sm text-destructive">
-                加载失败：{summaryQuery.error instanceof Error
-                  ? summaryQuery.error.message
-                  : "unknown"}
-              </div>
-            ) : models.length === 0 ? (
-              <div className="text-sm text-muted-foreground">
-                暂无数据
-              </div>
-            ) : (
-              <div className="-mx-6 overflow-x-auto px-6">
-                <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>模型</TableHead>
-                    <TableHead>趋势</TableHead>
-                    <TableHead className="text-right">TPS</TableHead>
-                    <TableHead className="text-right">平均延迟</TableHead>
-                    <TableHead className="text-right">成功率</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {models.map((m) => (
-                    <TableRow key={m.model_name}>
-                      <TableCell className="font-medium">
-                        {m.model_name}
-                      </TableCell>
-                      <TableCell>
-                        <Sparkline
-                          values={m.recent_success_rates ?? []}
-                          tone={
-                            m.success_rate >= 99
-                              ? "ok"
-                              : m.success_rate >= 95
-                                ? "warn"
-                                : "danger"
-                          }
-                          className="h-7 w-28"
-                        />
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {m.avg_tps.toFixed(1)}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {formatLatency(m.avg_latency_ms)}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <Badge
-                          variant={
-                            m.success_rate >= 99
-                              ? "default"
-                              : m.success_rate >= 95
-                                ? "secondary"
-                                : "destructive"
-                          }
-                          className="tabular-nums"
-                        >
-                          {m.success_rate.toFixed(1)}%
-                        </Badge>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+          <Card className="border-border/40">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base">系统健康度</CardTitle>
+              <CardDescription className="text-xs">实时仪表盘</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {isLoading ? (
+                <Skeleton className="h-72 w-full" />
+              ) : (
+                <HealthGauge
+                  successRate={summary.successRate}
+                  avgTps={summary.avgTps}
+                  avgLatencyMs={summary.avgLatency}
+                  healthy={healthy}
+                  warn={warn}
+                  danger={danger}
+                />
+              )}
+            </CardContent>
+          </Card>
+        </section>
+
+        {/* 排行 + 状态分布 (2:1) */}
+        <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+          <Card className="border-border/40 lg:col-span-2">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base">性能排行</CardTitle>
+              <CardDescription className="text-xs">
+                按平均延迟降序，绿色 ≥ 99% 成功率，黄色 ≥ 95%，红色 &lt; 95%
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {isLoading ? (
+                <Skeleton className="h-72 w-full" />
+              ) : models.length === 0 ? (
+                <div className="text-sm text-muted-foreground">暂无数据</div>
+              ) : (
+                <PerformanceBarChart models={models} />
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="border-border/40">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base">状态分布</CardTitle>
+              <CardDescription className="text-xs">健康 / 告警 / 异常</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {isLoading ? (
+                <Skeleton className="h-72 w-full" />
+              ) : (
+                <StatusDonut
+                  healthy={healthy}
+                  warn={warn}
+                  danger={danger}
+                  degraded={degraded}
+                />
+              )}
+            </CardContent>
+          </Card>
+        </section>
+
+        {/* 模型详细卡片 */}
+        <section>
+          <div className="mb-2 flex items-baseline justify-between">
+            <h2 className="text-base font-semibold">模型详细</h2>
+            <span className="text-xs text-muted-foreground">共 {models.length} 个模型</span>
+          </div>
+          {isLoading ? (
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <Skeleton key={i} className="h-44 w-full" />
+              ))}
+            </div>
+          ) : models.length === 0 ? (
+            <Card className="border-border/40">
+              <CardContent className="text-sm text-muted-foreground">暂无数据</CardContent>
+            </Card>
+          ) : (
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              {models.map((m) => (
+                <ModelCard key={m.model_name} model={m} />
+              ))}
+            </div>
+          )}
+        </section>
       </main>
+
+      <FooterBar
+        hours={hours}
+        onHoursChange={setHours}
+        options={HOURS_OPTIONS}
+        lastSyncMs={updatedAt}
+        staleTimeMs={STALE_MS}
+      />
     </div>
   )
 }
 
-type Tone = "default" | "warn" | "danger"
-
-type Alert = { severity: "warn" | "danger"; message: string }
-
-function buildAlerts(
-  models: ModelSummaryComputed[],
-  summary: ReturnType<typeof summarize>
-): Alert[] {
-  const out: Alert[] = []
-  if (models.length === 0) return out
-  if (Number.isFinite(summary.successRate) && summary.successRate < 95) {
-    out.push({
-      severity: "danger",
-      message: `整体成功率 ${summary.successRate.toFixed(1)}% 低于 95%`,
-    })
-  } else if (Number.isFinite(summary.successRate) && summary.successRate < 99) {
-    out.push({
-      severity: "warn",
-      message: `整体成功率 ${summary.successRate.toFixed(1)}%（目标 ≥ 99%）`,
-    })
-  }
-  const degraded = models.filter((m) => m.success_rate < 95)
-  if (degraded.length > 0) {
-    const names = degraded
-      .slice(0, 3)
-      .map((m) => m.model_name)
-      .join("、")
-    const more = degraded.length > 3 ? ` 等 ${degraded.length} 个` : ""
-    out.push({
-      severity: "danger",
-      message: `${degraded.length} 个模型成功率 < 95%：${names}${more}`,
-    })
-  }
-  const slow = models.filter((m) => m.avg_latency_ms > 10_000)
-  if (slow.length > 0) {
-    const names = slow
-      .slice(0, 3)
-      .map((m) => m.model_name)
-      .join("、")
-    const more = slow.length > 3 ? ` 等 ${slow.length} 个` : ""
-    out.push({
-      severity: "warn",
-      message: `${slow.length} 个模型平均延迟 > 10s：${names}${more}`,
-    })
-  }
-  return out
-}
-
-function KpiCard({
+// 大号 KPI 卡片 — 数字用 useAnimatedNumber 做 count-up 动效。
+function BigKpi({
   label,
   value,
+  secondary,
+  format,
   icon,
-  tone = "default",
+  tone,
   loading,
 }: {
   label: string
-  value: string | null
+  value: number
+  secondary?: string
+  format: (n: number) => string
   icon: React.ReactNode
-  tone?: Tone
+  tone: "default" | "ok" | "warn" | "danger"
   loading?: boolean
 }) {
+  const animated = useAnimatedNumber(value)
   const toneClass =
-    tone === "warn"
-      ? "text-amber-600 dark:text-amber-400"
-      : tone === "danger"
-        ? "text-destructive"
-        : "text-foreground"
+    tone === "ok"
+      ? "text-emerald-500"
+      : tone === "warn"
+        ? "text-amber-500"
+        : tone === "danger"
+          ? "text-rose-500"
+          : "text-foreground"
   return (
-    <Card className="border-border/40">
-      <CardContent className="flex flex-col gap-1 p-4">
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          {icon}
-          {label}
+    <Card className="border-border/40 bg-card/60 backdrop-blur">
+      <CardContent className="flex flex-col gap-1.5 p-4">
+        <div className="flex items-center justify-between text-xs text-muted-foreground">
+          <span>{label}</span>
+          <span className="opacity-70">{icon}</span>
         </div>
-        {loading || value === null ? (
-          <Skeleton className="h-7 w-20" />
+        {loading ? (
+          <Skeleton className="h-9 w-24" />
         ) : (
-          <div className={"text-2xl font-semibold tabular-nums " + toneClass}>
-            {value}
+          <div className={"font-mono text-3xl font-bold tabular-nums leading-none " + toneClass}>
+            {format(animated)}
           </div>
+        )}
+        {secondary && !loading && (
+          <div className="text-[11px] text-muted-foreground">{secondary}</div>
         )}
       </CardContent>
     </Card>
