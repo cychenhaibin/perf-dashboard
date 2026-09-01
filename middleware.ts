@@ -69,9 +69,12 @@ export default async function middleware(req: Request): Promise<Response> {
 
   const url = new URL(req.url)
 
-  // Vercel's matcher stripped the /api/proxy/ prefix. The remaining path is
-  // the upstream's path (without the leading /api/).
-  const rest = url.pathname.replace(/^\/+/, "")
+  // The matcher filters requests to /api/proxy/*, but `url.pathname` is still
+  // the full request path. Strip the /api/proxy/ prefix so the rest mirrors
+  // what the Vercel serverless function at api/proxy/[...path].ts used to
+  // see in `req.query.path` (the upstream's path, which always starts with
+  // "api/" because the new-api serverless exposes /api/...).
+  const rest = url.pathname.replace(/^\/api\/proxy\//, "")
 
   const baseUrl = (url.searchParams.get("baseUrl") ?? "").trim().replace(/\/+$/, "")
   if (!baseUrl) return jsonResponse(400, { success: false, message: "baseUrl is required" })
