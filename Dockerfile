@@ -1,10 +1,10 @@
 # syntax=docker/dockerfile:1.7
 
-# Stage 1 — build the React frontend with Bun.
-# node:22-bookworm-slim 跟 model-probe 一致, 自带 npm 装 bun, 避开
-# oven/bun:1 镜像在 ubuntu-latest runner 上的潜在拉取/兼容问题.
-FROM node:22-bookworm-slim AS web-builder
+# Stage 1 — build the React frontend.
+# alpine 跟后面的 Go builder base 一致, 拉镜像/解析层都更快.
+FROM alpine:3.20 AS web-builder
 WORKDIR /build/web
+RUN apk add --no-cache nodejs npm bash
 RUN npm install -g bun
 COPY web/package.json web/bun.lock* ./
 RUN bun install --frozen-lockfile
