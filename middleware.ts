@@ -90,8 +90,8 @@ export default async function middleware(req: Request): Promise<Response> {
     return jsonResponse(400, { success: false, message: "baseUrl must be http(s)" })
   }
 
-  // Build target URL = baseUrl + "/" + rest (rest is something like "api/user/self").
-  const target = new URL(rest, base)
+  // Build target URL = baseUrl + "/api/" + rest.
+  const target = new URL(`api/${rest}`, base)
 
   // Forward remaining query params (excluding `baseUrl`).
   url.searchParams.forEach((value, key) => {
