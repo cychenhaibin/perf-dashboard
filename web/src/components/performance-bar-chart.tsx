@@ -14,7 +14,7 @@ export function PerformanceBarChart({ models }: { models: ModelSummaryComputed[]
     const data = sorted.map((m) => ({
       name: m.model_name,
       value: Math.round(m.avg_latency_ms),
-      tone: m.success_rate >= 99 ? 0 : m.success_rate >= 95 ? 1 : 2,
+      tone: m.success_rate >= 80 ? 0 : m.success_rate >= 70 ? 1 : 2,
     }))
     return {
       animation: true,

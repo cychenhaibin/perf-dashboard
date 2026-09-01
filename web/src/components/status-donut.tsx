@@ -4,7 +4,7 @@ import type { EChartsCoreOption } from "echarts/core"
 import { EChart } from "@/components/echart"
 
 // Donut breakdown of how many models fall into ok / warn / danger
-// (success-rate ≥ 99% / ≥ 95% / < 95%). The center label shows the total
+// (success-rate ≥ 80% / ≥ 70% / < 70%). The center label shows the total
 // model count; the legend doubles as a quick status summary.
 export function StatusDonut({
   healthy,

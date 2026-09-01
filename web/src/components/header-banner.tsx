@@ -37,7 +37,7 @@ export function HeaderBanner({
 
   return (
     <header className="sticky top-0 z-30 border-b border-border/40 bg-background/70 backdrop-blur-xl">
-      <div className="container mx-auto flex h-16 items-center gap-4 px-4">
+      <div className="flex h-16 w-full items-center gap-4 px-4">
         {/* Logo + title */}
         <div className="flex items-center gap-3">
           <div className="relative flex size-9 items-center justify-center rounded-lg bg-primary/10 text-primary">

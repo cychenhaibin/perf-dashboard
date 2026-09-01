@@ -37,7 +37,7 @@ export function HealthGauge({
 }) {
   const animatedRate = useAnimatedNumber(successRate)
   const rateTone = Number.isFinite(successRate)
-    ? classify(successRate, { ok: [99, 100], warn: [95, 99] })
+    ? classify(successRate, { ok: [80, 100], warn: [70, 80] })
     : "warn"
   const rateColor = toneColor(rateTone)
   const tpsTone = Number.isFinite(avgTps) && avgTps >= 20 ? "ok" : avgTps >= 10 ? "warn" : "danger"

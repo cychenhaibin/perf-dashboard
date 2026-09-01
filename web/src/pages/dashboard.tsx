@@ -68,24 +68,24 @@ function buildAlerts(
 ): Alert[] {
   const out: Alert[] = []
   if (models.length === 0) return out
-  if (Number.isFinite(summary.successRate) && summary.successRate < 95) {
+  if (Number.isFinite(summary.successRate) && summary.successRate < 70) {
     out.push({
       severity: "danger",
-      message: `整体成功率 ${summary.successRate.toFixed(1)}% 低于 95%`,
+      message: `整体成功率 ${summary.successRate.toFixed(1)}% 低于 70%`,
     })
-  } else if (Number.isFinite(summary.successRate) && summary.successRate < 99) {
+  } else if (Number.isFinite(summary.successRate) && summary.successRate < 80) {
     out.push({
       severity: "warn",
-      message: `整体成功率 ${summary.successRate.toFixed(1)}%（目标 ≥ 99%）`,
+      message: `整体成功率 ${summary.successRate.toFixed(1)}%（目标 ≥ 80%）`,
     })
   }
-  const degraded = models.filter((m) => m.success_rate < 95)
+  const degraded = models.filter((m) => m.success_rate < 70)
   if (degraded.length > 0) {
     const names = degraded.slice(0, 3).map((m) => m.model_name).join("、")
     const more = degraded.length > 3 ? ` 等 ${degraded.length} 个` : ""
     out.push({
       severity: "danger",
-      message: `${degraded.length} 个模型成功率 < 95%：${names}${more}`,
+      message: `${degraded.length} 个模型成功率 < 70%：${names}${more}`,
     })
   }
   const slow = models.filter((m) => m.avg_latency_ms > 10_000)
@@ -190,8 +190,8 @@ export function DashboardPage() {
     const dangerArr: ModelSummaryComputed[] = []
     const degradedNames: string[] = []
     for (const m of models) {
-      if (m.success_rate >= 99) healthyArr.push(m)
-      else if (m.success_rate >= 95) warnArr.push(m)
+      if (m.success_rate >= 80) healthyArr.push(m)
+      else if (m.success_rate >= 70) warnArr.push(m)
       else {
         dangerArr.push(m)
         degradedNames.push(m.model_name)
@@ -217,7 +217,7 @@ export function DashboardPage() {
         lastSyncLabel={lastSyncLabel}
       />
 
-      <main className="container mx-auto space-y-4 px-4 py-4">
+      <main className="w-full space-y-4 px-4 py-4">
         {/* 异常告警 */}
         {alerts.length > 0 && (
           <section className="space-y-1.5">
@@ -243,9 +243,10 @@ export function DashboardPage() {
           </section>
         )}
 
-        {/* KPI 大字 — 5 张, 数字带 count-up 动画. 强制 grid-cols-5 保证指挥中心感,
-            窄屏会自然换行, 不依赖断点. */}
-        <section className="grid grid-cols-2 gap-1.5 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5">
+        {/* KPI — 5 张, 数字带 count-up 动画. 窄屏自然换行. 只通过收紧
+            卡片内边距压高度, 字号/icon 保持原版可读性. items-start
+            防止 grid items-stretch 把卡片拉得跟含 secondary 的最高那张一样高. */}
+        <section className="grid grid-cols-2 items-start gap-1.5 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5">
           <BigKpi
             label="总模型数"
             value={summary.totalModels}
@@ -278,9 +279,9 @@ export function DashboardPage() {
             tone={
               !Number.isFinite(summary.successRate)
                 ? "default"
-                : summary.successRate >= 99
+                : summary.successRate >= 80
                   ? "ok"
-                  : summary.successRate >= 95
+                  : summary.successRate >= 70
                     ? "warn"
                     : "danger"
             }
@@ -360,7 +361,7 @@ export function DashboardPage() {
             <CardHeader className="pb-2">
               <CardTitle className="text-base">性能排行</CardTitle>
               <CardDescription className="text-xs">
-                按平均延迟降序，绿色 ≥ 99% 成功率，黄色 ≥ 95%，红色 &lt; 95%
+                按平均延迟降序，绿色 ≥ 80% 成功率，黄色 ≥ 70%，红色 &lt; 70%
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -459,8 +460,8 @@ function BigKpi({
           ? "text-rose-500"
           : "text-foreground"
   return (
-    <Card className="border-border/40 bg-card/60 backdrop-blur">
-      <CardContent className="flex flex-col gap-1 p-2.5">
+    <Card className="self-start border-border/40 bg-card/60 backdrop-blur">
+      <CardContent className="flex flex-col gap-1 px-3 py-0.5">
         <div className="flex items-center justify-between text-[11px] text-muted-foreground">
           <span>{label}</span>
           <span className="opacity-70">{icon}</span>
@@ -473,7 +474,7 @@ function BigKpi({
           </div>
         )}
         {secondary && !loading && (
-          <div className="text-[10px] text-muted-foreground">{secondary}</div>
+          <div className="text-[10px] leading-tight text-muted-foreground">{secondary}</div>
         )}
       </CardContent>
     </Card>

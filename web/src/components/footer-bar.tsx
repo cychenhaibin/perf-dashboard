@@ -28,7 +28,7 @@ export function FooterBar({
 
   return (
     <footer className="mt-6 border-t border-border/40 bg-background/60 px-4 py-3 backdrop-blur-xl">
-      <div className="container mx-auto flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
+      <div className="flex w-full flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
         {/* Time range tabs */}
         <div className="flex items-center gap-1 rounded-md border border-border/40 bg-muted/30 p-0.5">
           {options.map((o) => {

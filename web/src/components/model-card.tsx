@@ -10,9 +10,11 @@ import { useAnimatedNumber } from "@/hooks/use-animated-number"
 type Tone = "ok" | "warn" | "danger"
 
 function toneFor(successRate: number, latencyMs: number): Tone {
-  if (successRate < 95) return "danger"
-  if (successRate < 99) return "warn"
-  if (latencyMs > 15_000) return "warn"
+  if (successRate < 70) return "danger"
+  if (successRate < 80) return "warn"
+  // 暂时不把延迟算进 tone, 卡片只看成功率
+  // if (latencyMs > 15_000) return "warn"
+  void latencyMs
   return "ok"
 }
 
