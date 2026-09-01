@@ -245,7 +245,7 @@ export function DashboardPage() {
 
         {/* KPI 大字 — 5 张, 数字带 count-up 动画. 强制 grid-cols-5 保证指挥中心感,
             窄屏会自然换行, 不依赖断点. */}
-        <section className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5">
+        <section className="grid grid-cols-2 gap-1.5 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5">
           <BigKpi
             label="总模型数"
             value={summary.totalModels}
@@ -460,20 +460,20 @@ function BigKpi({
           : "text-foreground"
   return (
     <Card className="border-border/40 bg-card/60 backdrop-blur">
-      <CardContent className="flex flex-col gap-1.5 p-4">
-        <div className="flex items-center justify-between text-xs text-muted-foreground">
+      <CardContent className="flex flex-col gap-1 p-2.5">
+        <div className="flex items-center justify-between text-[11px] text-muted-foreground">
           <span>{label}</span>
           <span className="opacity-70">{icon}</span>
         </div>
         {loading ? (
-          <Skeleton className="h-9 w-24" />
+          <Skeleton className="h-6 w-20" />
         ) : (
-          <div className={"font-mono text-3xl font-bold tabular-nums leading-none " + toneClass}>
+          <div className={"font-mono text-2xl font-bold tabular-nums leading-none " + toneClass}>
             {format(animated)}
           </div>
         )}
         {secondary && !loading && (
-          <div className="text-[11px] text-muted-foreground">{secondary}</div>
+          <div className="text-[10px] text-muted-foreground">{secondary}</div>
         )}
       </CardContent>
     </Card>
