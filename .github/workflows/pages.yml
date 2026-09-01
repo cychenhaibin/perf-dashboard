@@ -37,7 +37,10 @@ jobs:
 
       - name: Install web deps
         working-directory: web
-        run: bun install --frozen-lockfile
+        # Drop --frozen-lockfile here too: bun 1.4 in CI sees platform-hash
+        # mismatch vs. macOS-generated lockfile, and refuses. Local dev
+        # keeps --frozen-lockfile (see web/package.json scripts).
+        run: bun install --no-frozen-lockfile
 
       - name: Build static frontend
         working-directory: web
