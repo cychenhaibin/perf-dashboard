@@ -71,7 +71,7 @@ export function ConfigurePage() {
           <div className="mx-auto mb-2 flex size-12 items-center justify-center rounded-xl bg-primary/10 text-primary ring-1 ring-border/40 backdrop-blur">
             <Gauge className="size-6" />
           </div>
-          <CardTitle className="text-2xl">perf-dashboard</CardTitle>
+          <CardTitle className="text-2xl">模型健康监控</CardTitle>
           <CardDescription>
             输入 new-api 实例的 baseUrl 以开始
           </CardDescription>

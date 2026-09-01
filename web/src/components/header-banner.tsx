@@ -48,7 +48,7 @@ export function HeaderBanner({
             />
           </div>
           <div>
-            <div className="text-base font-semibold tracking-tight">perf-dashboard</div>
+            <div className="text-base font-semibold tracking-tight">模型健康监控</div>
             <div className="text-[10px] uppercase tracking-widest text-muted-foreground">
               实时监控大屏
             </div>
