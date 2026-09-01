@@ -24,8 +24,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      # vite.config.ts 用这个 env 切换 base path
-      GITHUB_PAGES: "1"
+      # vite.config.ts 用这个 env 切换 base path. 故意不叫 GITHUB_PAGES,
+      # 因为 Vercel 那个 import 的 repo 会自动注入 GITHUB_PAGES=1, 会把
+      # Vercel 部署也设成 /perf-dashboard/ base 路径, 不对.
+      PERF_DASHBOARD_BASE_PATH: "/perf-dashboard/"
     steps:
       - name: Checkout
         uses: actions/checkout@v4

@@ -8,9 +8,16 @@ import tailwindcss from "@tailwindcss/vite"
 // user has configured a baseUrl (so the input page itself doesn't throw
 // during initial paint), we point at a benign no-op.
 export default defineConfig({
-  // GitHub Pages serves the app under /perf-dashboard/ (project page). Set the
-  // base so the built index.html references the right absolute asset paths.
-  base: process.env.GITHUB_PAGES ? "/perf-dashboard/" : "/",
+  // We deploy this same Vite build to two places:
+  //   - GitHub Pages: project page at /perf-dashboard/ (assets must be referenced
+  //     with that absolute prefix so the React Router still works under the
+  //     subpath)
+  //   - Vercel: served at the apex of a vercel.app subdomain, so the default
+  //     base "/" is correct
+  // We read a project-specific env var (NOT GITHUB_PAGES, which Vercel
+  // auto-populates to "1" for GitHub-imported repos and would otherwise
+  // override our intent on Vercel builds).
+  base: process.env.PERF_DASHBOARD_BASE_PATH || "/",
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
