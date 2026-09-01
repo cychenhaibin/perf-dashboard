@@ -1,8 +1,11 @@
 # syntax=docker/dockerfile:1.7
 
 # Stage 1 — build the React frontend with Bun.
-FROM oven/bun:1 AS web-builder
+# node:22-bookworm-slim 跟 model-probe 一致, 自带 npm 装 bun, 避开
+# oven/bun:1 镜像在 ubuntu-latest runner 上的潜在拉取/兼容问题.
+FROM node:22-bookworm-slim AS web-builder
 WORKDIR /build/web
+RUN npm install -g bun
 COPY web/package.json web/bun.lock* ./
 RUN bun install --frozen-lockfile
 COPY web ./
@@ -14,7 +17,7 @@ RUN bun run build
 FROM golang:1.22-alpine AS go-builder
 WORKDIR /build
 ENV CGO_ENABLED=0
-COPY go.mod go.sum* ./
+COPY go.mod ./
 RUN go mod download
 COPY . .
 COPY --from=web-builder /build/web/dist ./web_dist
