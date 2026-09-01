@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react"
-import { Gauge, RefreshCw, Settings2 } from "lucide-react"
+import { Gauge, Moon, RefreshCw, Settings2, Sun } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import { useBaseUrl } from "@/hooks/use-base-url"
+import { useTheme } from "@/hooks/use-theme"
 
 // Sticky top banner. Shows the project title, a live wall-clock, the
 // upstream instance (baseUrl), the connection status (driven by the
@@ -93,6 +94,7 @@ export function HeaderBanner({
 
         {/* Actions */}
         <div className="flex items-center gap-1">
+          <ThemeToggle />
           <Button
             variant="ghost"
             size="icon"
@@ -131,6 +133,25 @@ function StatusDot({ status }: { status: "online" | "offline" | "stale" }) {
       />
       <span className={"relative inline-flex size-2.5 rounded-full " + color} />
     </span>
+  )
+}
+
+// Sun/Moon toggle. Shows the icon of the mode you'll switch TO when
+// clicked — the same convention the shadcn new-york-v4 dashboard demo
+// uses, so existing muscle memory still works.
+function ThemeToggle() {
+  const { theme, toggle } = useTheme()
+  const isDark = theme === "dark"
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      onClick={toggle}
+      aria-label={isDark ? "切换到浅色模式" : "切换到深色模式"}
+      title={isDark ? "切换到浅色模式" : "切换到深色模式"}
+    >
+      {isDark ? <Sun className="size-4" /> : <Moon className="size-4" />}
+    </Button>
   )
 }
 
