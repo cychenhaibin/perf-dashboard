@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/svg+xml" href="/perf-dashboard/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>模型健康监控</title>
     <script>
@@ -19,6 +19,33 @@
         } catch (e) {
           document.documentElement.classList.add("dark");
           document.documentElement.style.colorScheme = "dark";
+        }
+      })();
+    </script>
+    <script>
+      // GitHub Pages SPA fallback handler. When 404.html redirects here with
+      // ?/<path> in the query, restore the original path via history API.
+      // (pathSegmentsToKeep = 1 because the app lives at /perf-dashboard/)
+      (function () {
+        var pathSegmentsToKeep = 1;
+        var l = window.location;
+        if (l.search[1] === "/") {
+          var decoded = l.search
+            .slice(1)
+            .split("&")
+            .map(function (s) {
+              return s.replace(/~and~/g, "&");
+            })
+            .join("?");
+          var newPath =
+            l.pathname
+              .split("/")
+              .slice(0, 1 + pathSegmentsToKeep)
+              .join("/") +
+            "/" +
+            decoded.replace(/^\//, "") +
+            l.hash;
+          window.history.replaceState(null, "", newPath);
         }
       })();
     </script>

@@ -8,6 +8,9 @@ import tailwindcss from "@tailwindcss/vite"
 // user has configured a baseUrl (so the input page itself doesn't throw
 // during initial paint), we point at a benign no-op.
 export default defineConfig({
+  // GitHub Pages serves the app under /perf-dashboard/ (project page). Set the
+  // base so the built index.html references the right absolute asset paths.
+  base: process.env.GITHUB_PAGES ? "/perf-dashboard/" : "/",
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {

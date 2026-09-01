@@ -1,0 +1,63 @@
+name: Deploy static frontend to GitHub Pages
+
+# 部署纯静态前端到 GitHub Pages. 提醒: 这个 workflow 只 push web_dist,
+# /api/proxy/* 走不通 (Pages 没法跑 Go 后端), 浏览器直接打 new-api
+# 会被 CORS 拦. 解决方案: 自己跑 Go 镜像 (haibinchen/perf-dashboard:latest),
+# 或者在 new-api 那边开 CORS.
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 避免两个 workflow 同时往 Pages 推
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      # vite.config.ts 用这个 env 切换 base path
+      GITHUB_PAGES: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install web deps
+        working-directory: web
+        run: bun install --frozen-lockfile
+
+      - name: Build static frontend
+        working-directory: web
+        run: bun run build
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
