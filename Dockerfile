@@ -17,13 +17,21 @@ ENV CI=""
 ENV DISABLE_ESLINT_PLUGIN="true"
 RUN bun run build
 
-# Stage 2 — build the Go binary, embedding the frontend bundle.
+# Stage 2 — build the Go static server. main.go embeds web/dist at build
+# time via `//go:embed all:web_dist`, so the resulting binary is a single
+# self-contained file that serves both the frontend and the /api/proxy
+# reverse proxy.
+#
+# Go 文件挪到 server/ 子目录, 避免 Vercel 误判项目为 Go 框架
+# (Vercel 见根目录有 main.go + go.mod 就强行走 Go preset, 忽略
+# api/ serverless function). web_dist 必须在 main.go 同级 — Go embed
+# 不允许 `..` 路径, 所以 Dockerfile 也在 server/ 下做 WORKDIR.
 FROM golang:1.22-alpine AS go-builder
-WORKDIR /build
+WORKDIR /build/server
 ENV CGO_ENABLED=0
-COPY go.mod ./
+COPY server/go.mod ./
 RUN go mod download
-COPY . .
+COPY server/ ./
 COPY --from=web-builder /build/web/dist ./web_dist
 RUN go build -ldflags "-s -w" -o /perf-dashboard .
 

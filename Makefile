@@ -4,7 +4,9 @@ SHELL := /bin/bash
 # Override on the command line, e.g. `make build WEB=...` if you ever need to.
 WEB_DIR      := web
 WEB_DIST_SRC := $(WEB_DIR)/dist
-EMBED_DIR    := web_dist
+# Embed dir lives next to main.go (server/), not at repo root, because
+# `//go:embed` doesn't allow `..` paths. The Dockerfile does the same.
+EMBED_DIR    := server/web_dist
 
 # Embed dir must exist (and contain at least an index.html) for `go build` to
 # succeed, because main.go uses //go:embed. CI builds the frontend first;
@@ -12,9 +14,6 @@ EMBED_DIR    := web_dist
 .PHONY: ensure-embed-dir
 ensure-embed-dir:
 	@mkdir -p $(EMBED_DIR)
-	@if [ ! -f $(EMBED_DIR)/index.html ]; then \
-		cp $(EMBED_DIR)/index.html $(EMBED_DIR)/index.html.bak 2>/dev/null || true; \
-	fi
 	@test -f $(EMBED_DIR)/index.html || (echo "missing $(EMBED_DIR)/index.html" && exit 1)
 
 .PHONY: web-install
@@ -32,7 +31,7 @@ copy-embed: web-build ensure-embed-dir
 
 .PHONY: go-build
 go-build: ensure-embed-dir
-	go build -ldflags "-s -w" -o perf-dashboard .
+	cd server && go build -ldflags "-s -w" -o ../perf-dashboard .
 
 .PHONY: build
 build: copy-embed go-build
@@ -47,10 +46,10 @@ dev-web:
 
 .PHONY: clean
 clean:
-	rm -rf $(EMBED_DIR)/* perf-dashboard
+	rm -rf $(EMBED_DIR) perf-dashboard
 	cd $(WEB_DIR) && rm -rf dist .vite
 
 .PHONY: test
 test:
-	go vet ./...
-	go build ./...
+	cd server && go vet ./...
+	cd server && go build ./...

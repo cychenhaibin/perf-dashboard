@@ -24,6 +24,9 @@ func main() {
 		port = "5050"
 	}
 
+	// fs.Sub lets the rest of the program address the embedded assets by
+	// their original paths (`index.html`, `assets/...`) without the
+	// `web_dist/` prefix.
 	dist, err := fs.Sub(webDist, "web_dist")
 	if err != nil {
 		log.Fatalf("embedded web_dist is missing — did you forget to build the frontend first?")
