@@ -1,0 +1,16 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "cd web && bun install --no-frozen-lockfile && bun run build",
+  "installCommand": "cd web && bun install --no-frozen-lockfile",
+  "outputDirectory": "web/dist",
+  "framework": null,
+  "functions": {
+    "api/proxy/[...path].ts": {
+      "maxDuration": 10,
+      "memory": 128
+    }
+  },
+  "rewrites": [
+    { "source": "/((?!api/|assets/|favicon\\.svg|.*\\.[a-zA-Z0-9]+$).*)", "destination": "/index.html" }
+  ]
+}
