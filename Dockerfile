@@ -7,7 +7,11 @@ WORKDIR /build/web
 RUN apk add --no-cache nodejs npm bash
 RUN npm install -g bun
 COPY web/package.json web/bun.lock* ./
-RUN bun install --frozen-lockfile
+# CI build 不要用 --frozen-lockfile: 本地 macOS arm64 生成的 bun.lock
+# 跟 alpine x86_64 容器里 bun 1.4.0 算出的 lockfile 哈希不一致, 会触发
+# 'lockfile had changes, but lockfile is frozen' 错误. 让 bun 在容器里
+# 重新 resolve 即可. 本地开发仍然 frozen.
+RUN bun install --no-frozen-lockfile
 COPY web ./
 ENV CI=""
 ENV DISABLE_ESLINT_PLUGIN="true"
